@@ -452,31 +452,8 @@ def mismatch(h1, h2, inv_psd, df):
     return float(1.0 - h1h2 / jnp.sqrt(h1h1 * h2h2))
 
 
-def params_to_physical(params, use_transformed=False):
-    """Sampling parameters -> physical ones (lnA -> A, sin(beta) -> beta, cos(iota) -> iota)."""
-    if not use_transformed:
-        return params
-    p = params.at[..., 2].set(jnp.exp(params[..., 2]))
-    p = p.at[..., 3].set(jnp.arcsin(jnp.clip(params[..., 3], -1.0, 1.0)))
-    p = p.at[..., 6].set(jnp.arccos(jnp.clip(params[..., 6], -1.0, 1.0)))
-    return p
-
-
-def physical_to_sampling(params_phys, use_transformed=False):
-    """Physical parameters -> sampling ones (A -> lnA, beta -> sin(beta), iota -> cos(iota))."""
-    p = np.array(params_phys, dtype=float, copy=True)
-    if use_transformed:
-        p[..., 2] = np.log(p[..., 2])
-        p[..., 3] = np.sin(p[..., 3])
-        p[..., 6] = np.cos(p[..., 6])
-    return p
-
-
-def get_parameter_labels(use_transformed=False, include_noise=False):
-    if use_transformed:
-        labels = [r"$f_0$ [Hz]", r"$\dot f_0$ [Hz/s]", r"$\ln A$", r"$\sin\beta$", r"$\lambda$", r"$\psi$", r"$\cos\iota$", r"$\phi_0$"]
-    else:
-        labels = [r"$f_0$ [Hz]", r"$\dot f_0$ [Hz/s]", r"$A$", r"$\beta$", r"$\lambda$", r"$\psi$", r"$\iota$", r"$\phi_0$"]
+def get_parameter_labels(include_noise=False):
+    labels = [r"$f_0$ [Hz]", r"$\dot f_0$ [Hz/s]", r"$A$", r"$\beta$", r"$\lambda$", r"$\psi$", r"$\iota$", r"$\phi_0$"]
     if include_noise:
         labels += [r"$\sigma_A$", r"$\sigma_E$", r"$\sigma_T$"]
     return labels
@@ -584,7 +561,7 @@ class GBAnalysis:
         return mf, opt
 
     # -- likelihood ----------------------------------------------------------
-    def make_log_likelihood(self, fit_noise=False, use_transformed=False, batch_size=256):
+    def make_log_likelihood(self, fit_noise=False, batch_size=256):
         """Batched ln L for Eryn. params: (N, 8) or (N, 11) with sigma_A, sigma_E, sigma_T last.
 
         fit_noise=False: ln L = -1/2 <r|r> with the known PSD (constant normalisation dropped).
@@ -596,7 +573,7 @@ class GBAnalysis:
 
         @jax.jit
         def _ll(params):
-            gb = params_to_physical(params[:, :8], use_transformed)
+            gb = params[:, :8]
             resid = data[None] - self._template_wide_impl(gb)[:, :, sl]
             if not fit_noise:
                 return -0.5 * inner_product(resid, resid, inv_psd, df)
@@ -951,29 +928,24 @@ def interactive_sky_snr(analysis, nside=8, quantity="intrinsic"):
         )
 
 
-def samples_to_sky_counts(samples, nside=64, use_transformed=False):
-    """HEALPix counts of posterior samples; columns 3, 4 are (beta or sin beta, lambda)."""
-    beta = np.arcsin(np.clip(samples[:, 3], -1, 1)) if use_transformed else samples[:, 3]
-    pix = hp.ang2pix(nside, np.pi / 2 - beta, samples[:, 4])
+def samples_to_sky_counts(samples, nside=64):
+    """HEALPix counts of posterior samples; columns 3, 4 are (beta, lambda)."""
+    pix = hp.ang2pix(nside, np.pi / 2 - samples[:, 3], samples[:, 4])
     return np.bincount(pix, minlength=hp.nside2npix(nside))
 
 
 # ---------------------------------------------------------------------------
 # Priors and MCMC
 # ---------------------------------------------------------------------------
-def make_priors(f0_center, f0_halfwidth, A_center, sigma0=None, use_transformed=False):
+def make_priors(f0_center, f0_halfwidth, A_center, sigma0=None):
     """Uniform priors for the GB parameters (+ 3 noise sigmas if `sigma0` is given).
 
     Returns (priors, periodic, ndims, bounds) in the format expected by Eryn.
     """
     A_lo, A_hi = A_center / 4, A_center * 4
     fdot_lo, fdot_hi = -1e-15, 3e-15
-    if use_transformed:
-        bounds = [(f0_center - f0_halfwidth, f0_center + f0_halfwidth), (fdot_lo, fdot_hi), (np.log(A_lo), np.log(A_hi)),
-                  (-1.0, 1.0), (0.0, 2 * np.pi), (0.0, np.pi), (-1.0, 1.0), (0.0, 2 * np.pi)]
-    else:
-        bounds = [(f0_center - f0_halfwidth, f0_center + f0_halfwidth), (fdot_lo, fdot_hi), (A_lo, A_hi),
-                  (-np.pi / 2, np.pi / 2), (0.0, 2 * np.pi), (0.0, np.pi), (0.0, np.pi), (0.0, 2 * np.pi)]
+    bounds = [(f0_center - f0_halfwidth, f0_center + f0_halfwidth), (fdot_lo, fdot_hi), (A_lo, A_hi),
+              (-np.pi / 2, np.pi / 2), (0.0, 2 * np.pi), (0.0, np.pi), (0.0, np.pi), (0.0, 2 * np.pi)]
     if sigma0 is not None:
         bounds += [(s / 100, 5.0 * s) for s in sigma0]  # multiplicative range around the reference sigma
     priors = {"gb": ProbDistContainer({i: uniform_dist(lo, hi) for i, (lo, hi) in enumerate(bounds)})}
@@ -982,7 +954,7 @@ def make_priors(f0_center, f0_halfwidth, A_center, sigma0=None, use_transformed=
 
 
 def run_gb_mcmc(log_likelihood, priors, periodic, ndims, bounds, start_params, nwalkers=32, ntemps=8,
-                n_iterations=2000, burn=1000, rel_scatter=1e-4, use_transformed=False, seed=RNG_SEED, progress=True):
+                n_iterations=2000, burn=1000, rel_scatter=1e-4, seed=RNG_SEED, progress=True):
     """Parallel-tempered ensemble MCMC started in a tight ball around `start_params`.
 
     Returns the Eryn sampler. Eryn draws from NumPy's global RNG, which is seeded here.
@@ -1000,13 +972,11 @@ def run_gb_mcmc(log_likelihood, priors, periodic, ndims, bounds, start_params, n
         truth = start_params[i]
         if i == 0:
             scale = min(rel_scatter, 1e-5) * abs(truth)  # stay inside the narrow f0 prior
-        elif use_transformed and i in (2, 3, 6):
-            scale = rel_scatter if abs(truth) < 1.0 else rel_scatter * abs(truth)
         else:
             scale = rel_scatter * abs(truth) if truth != 0 else rel_scatter
         lo, hi = bounds[i]
         margin = 1e-5 * (hi - lo)
-        coords[:, 0, 0, i] = np.clip(rng.normal(truth, scale, size=(ntemps)), lo + margin, hi - margin)
+        coords[:, :, 0, i] = np.clip(rng.normal(truth, scale, size=(ntemps, nwalkers)), lo + margin, hi - margin)
 
     state = State({"gb": coords})
     inds = {"gb": np.ones((ntemps, nwalkers, 1), dtype=bool)}
