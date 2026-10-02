@@ -13,7 +13,7 @@ Create and activate the environment, then install the notebook dependencies:
 conda create -n lisa_env -c conda-forge -y python=3.12
 conda activate lisa_env
 python -m pip install --upgrade pip
-python -m pip install corner healpy eryn lisaorbits segwo pytdi jaxgb lisaconstants ipywidgets jupyter "numpy==2.3.3"
+python -m pip install corner healpy eryn lisaorbits segwo pytdi jaxgb lisaconstants ipywidgets jupyter "numpy==2.3.3" ipympl
 ```
 
 ### Option 2: Python virtual environment
@@ -23,14 +23,8 @@ Use Python 3.12 and the built-in `venv` module:
 python3.12 -m venv .venv
 source .venv/bin/activate
 python -m pip install --upgrade pip
-python -m pip install corner healpy eryn lisaorbits segwo pytdi jaxgb lisaconstants ipywidgets jupyter "numpy==2.3.3"
+python -m pip install corner healpy eryn lisaorbits segwo pytdi jaxgb lisaconstants ipywidgets jupyter "numpy==2.3.3" ipympl
 ```
-
-In either local environment, click-to-select in the interactive sky map is optional. Enable it with:
-```bash
-python -m pip install ipympl
-```
-Then run `%matplotlib widget` in a notebook cell. Without this backend, the sky map uses sliders instead.
 
 ## Run on Google Colab
 
