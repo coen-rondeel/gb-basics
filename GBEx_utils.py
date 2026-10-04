@@ -1,3 +1,6 @@
+from pathlib import Path
+
+import h5py
 import numpy as np
 
 from lisaorbits import Orbits
@@ -382,17 +385,56 @@ def distance_from_GW(fdot_GW, f_GW, A_GW):
 
 
 # ---------------------------------------------------------------------------
-# Reference sources (values from the tutorial table)
+# Verification binaries (read from VGB.hdf5)
 # ---------------------------------------------------------------------------
-SOURCES = {
-    "HM Cnc": dict(kind="AM CVn", f0=6.220e-3, fdot=72.5e-17, A=4.22e-23, cosiota=0.79, m1=0.55, m2=0.27, dL_kpc=7.50, lam=2.10, beta=-0.08, psi=2.35, phi0=5.79),
-    "ZTF J1539": dict(kind="DWD", f0=4.822e-3, fdot=27.6e-17, A=9.23e-23, cosiota=0.10, m1=0.61, m2=0.21, dL_kpc=2.47, lam=3.58, beta=1.15, psi=5.97, phi0=0.56),
-    "SDSS J0651": dict(kind="DWD", f0=2.614e-3, fdot=3.35e-17, A=15.79e-23, cosiota=0.05, m1=0.49, m2=0.25, dL_kpc=0.96, lam=1.77, beta=0.10, psi=0.98, phi0=2.44),
-    "CD-30 11223": dict(kind="sdB", f0=0.473e-3, fdot=0.015e-17, A=39.27e-23, cosiota=0.12, m1=0.79, m2=0.54, dL_kpc=0.36, lam=3.86, beta=-0.29, psi=4.30, phi0=3.53),
-    "ES Cet": dict(kind="sdB", f0=3.225e-3, fdot=-1.66e-17, A=9.26e-23, cosiota=0.50, m1=0.80, m2=0.16, dL_kpc=1.78, lam=0.43, beta=-0.35, psi=0.98, phi0=2.04),
-    "Synthetic 1": dict(kind="Benchmark", f0=3.500e-3, fdot=2.00e-17, A=8.77e-23, cosiota=1.00, m1=0.35, m2=0.35, dL_kpc=2.10, lam=1.00, beta=1.40, psi=0.50, phi0=1.20),
-    "Synthetic 2": dict(kind="Benchmark", f0=3.500e-3, fdot=2.00e-17, A=8.77e-23, cosiota=0.50, m1=0.35, m2=0.35, dL_kpc=2.10, lam=2.50, beta=0.05, psi=0.80, phi0=0.50),
+VGB_FILE = Path(__file__).with_name("VGB.hdf5")
+
+_VGB_SOURCE_NAMES = {
+    "HMCnc": "HM Cnc",
+    "ZTFJ1539": "ZTF J1539",
+    "SDSSJ0651": "SDSS J0651",
+    "CDm3011223": "CD-30 11223",
+    "ESCet": "ES Cet",
 }
+
+
+def load_vgb_catalog(path=None):
+    """Structured array with the raw VGB.hdf5 records (field names = HDF5 columns)."""
+    with h5py.File(VGB_FILE if path is None else path, "r") as f:
+        return f["data"][:]
+
+
+def _load_vgb_sources(records=None):
+    """Convert VGB.hdf5 records to the source-table conventions used in this module."""
+    records = load_vgb_catalog() if records is None else records
+    sources = {}
+    for row in records:
+        raw_name = row["Name"].decode("utf-8")
+        name = _VGB_SOURCE_NAMES.get(raw_name, raw_name)
+        sources[name] = dict(
+            kind="VGB",
+            f0=float(row["Frequency"]),
+            fdot=float(row["FrequencyDerivative"]),
+            A=float(row["Amplitude"]),
+            cosiota=np.cos(float(row["Inclination"])),
+            m1=float(row["Mass1"]),
+            m2=float(row["Mass2"]),
+            dL_kpc=float(row["Distance"]) / 1e3,
+            lam=float(row["EclipticLongitude"]),
+            beta=float(row["EclipticLatitude"]),
+            psi=float(row["Polarization"]),
+            phi0=float(row["InitialPhase"]),
+            raw_name=raw_name,
+        )
+    return sources
+
+
+VGB_RECORDS = load_vgb_catalog()
+SOURCES = _load_vgb_sources(VGB_RECORDS)
+# SOURCES.update({
+#     "Synthetic 1": dict(kind="Benchmark", f0=3.500e-3, fdot=2.00e-17, A=8.77e-23, cosiota=1.00, m1=0.35, m2=0.35, dL_kpc=2.10, lam=1.00, beta=1.40, psi=0.50, phi0=1.20),
+#     "Synthetic 2": dict(kind="Benchmark", f0=3.500e-3, fdot=2.00e-17, A=8.77e-23, cosiota=0.50, m1=0.35, m2=0.35, dL_kpc=2.10, lam=2.50, beta=0.05, psi=0.80, phi0=0.50),
+# })
 
 
 def get_source(name):
@@ -752,7 +794,7 @@ def animate_binary_gw(cos_iota=0.79, psi=0.0, arm_angle=0.0, n_frames=36, strain
 
     axr.plot(ring[0], ring[1], color="lightgray", lw=1)
     axr.plot([-u[0], u[0]], [-u[1], u[1]], color="lightcoral", lw=1, ls="--")
-    ring_line, = axr.plot([], [], color="C0", lw=2)
+    # ring_line, = axr.plot([], [], color="C0", lw=2)
     mass_pts, = axr.plot([], [], "o", color="C0", ms=6)
     arm_line, = axr.plot([], [], color="crimson", lw=4)
     arm_pts, = axr.plot([], [], "o", color="crimson", ms=9)
@@ -761,9 +803,10 @@ def animate_binary_gw(cos_iota=0.79, psi=0.0, arm_angle=0.0, n_frames=36, strain
     txt = axr.text(0, -1.5, "", ha="center")
 
     t = phi / (2 * np.pi)
+    axt.plot(t, h_arm, label=r"arm: $\Delta L/L$ [units of $\mathscr{A}$]", color="crimson", lw=2.5)
     axt.plot(t, hplus, label=r"$h_+$", color="C0", ls="--", lw=2)
     axt.plot(t, hcross, label=r"$h_\times$", color="C2", ls=":", lw=2.5)
-    axt.plot(t, h_arm, label=r"arm: $\Delta L/L$ [units of $\mathscr{A}$]", color="crimson", lw=2.5)
+    
     marker = axt.axvline(0, color="k")
     axt.set_xlabel("orbital phase [orbits]"); axt.set_ylabel("relative strain")
     axt.set_title("Two GW cycles per orbit"); axt.legend(loc="upper right", fontsize=8)
@@ -777,7 +820,7 @@ def animate_binary_gw(cos_iota=0.79, psi=0.0, arm_angle=0.0, n_frames=36, strain
             pt3.set_data_3d([x], [y], [z])
             pv.set_data([x], [y])
         d = displace(ring, hplus[k], hcross[k])
-        ring_line.set_data(d[0], d[1])
+        # ring_line.set_data(d[0], d[1])
         m = displace(masses, hplus[k], hcross[k])
         mass_pts.set_data(m[0], m[1])
         e = displace(np.stack([-u, u], axis=1), hplus[k], hcross[k])
@@ -804,7 +847,7 @@ def interactive_binary_animation():
     widgets.interact_manual(
         _run,
         cos_iota=widgets.FloatSlider(min=-1, max=1, step=0.05, value=0.79, description="cos(iota)"),
-        psi=widgets.FloatSlider(min=0, max=np.pi, step=np.pi / 8, value=0.0, description="psi", readout_format=".2f"),
+        psi=widgets.FloatSlider(min=0, max=np.pi, step=np.pi / 16, value=0.0, description="psi", readout_format=".2f"),
         arm_angle=widgets.FloatSlider(min=0, max=np.pi, step=np.pi / 8, value=0.0, description="arm angle", readout_format=".2f"),
     )
 
@@ -820,6 +863,13 @@ def galactic_plane_ecliptic(n=720):
     order = np.argsort(lon)
     theta_gc, phi_gc = rot(np.pi / 2, 0.0)
     return lon[order], np.pi / 2 - theta[order], (phi_gc + np.pi) % (2 * np.pi) - np.pi, np.pi / 2 - theta_gc
+
+
+def ecliptic_to_equatorial(lon, lat):
+    """Convert ecliptic longitude/latitude to equatorial RA/Dec; inputs and outputs are radians."""
+    rot = hp.Rotator(coord=["E", "C"])
+    theta, ra = rot(np.pi / 2 - np.asarray(lat), np.asarray(lon))
+    return ra, np.pi / 2 - theta
 
 
 def plot_sky_map(values, title, unit="", cmap="viridis", truth=None, galactic_plane=True):
@@ -955,7 +1005,10 @@ def make_priors(f0_center, f0_halfwidth, A_center, sigma0=None):
 
 def run_gb_mcmc(log_likelihood, priors, periodic, ndims, bounds, start_params, nwalkers=32, ntemps=8,
                 n_iterations=2000, burn=1000, rel_scatter=1e-4, seed=RNG_SEED, progress=True):
-    """Parallel-tempered ensemble MCMC started in a tight ball around `start_params`.
+    """Run parallel-tempered ensemble MCMC with a tight, two-mode initial ensemble.
+
+    Initial walkers cover both equivalent polarization/phase modes:
+    (psi, phi0) and (psi + pi/2, phi0 + pi).
 
     Returns the Eryn sampler. Eryn draws from NumPy's global RNG, which is seeded here.
     """
@@ -977,6 +1030,27 @@ def run_gb_mcmc(log_likelihood, priors, periodic, ndims, bounds, start_params, n
         lo, hi = bounds[i]
         margin = 1e-5 * (hi - lo)
         coords[:, :, 0, i] = np.clip(rng.normal(truth, scale, size=(ntemps, nwalkers)), lo + margin, hi - margin)
+
+    psi_lo, psi_hi = bounds[5]
+    phi0_lo, phi0_hi = bounds[7]
+    psi_period, phi0_period = psi_hi - psi_lo, phi0_hi - phi0_lo
+    psi_truth, phi0_truth = start_params[5], start_params[7]
+    psi_scale = rel_scatter * abs(psi_truth) if psi_truth != 0 else rel_scatter
+    phi0_scale = rel_scatter * abs(phi0_truth) if phi0_truth != 0 else rel_scatter
+    psi_base = rng.normal(psi_truth, psi_scale, size=(ntemps, nwalkers))
+    phi0_base = rng.normal(phi0_truth, phi0_scale, size=(ntemps, nwalkers))
+
+    # Initialize both equivalent modes: (psi, phi0) and (psi + pi/2, phi0 + pi).
+    second_mode = np.zeros((ntemps, nwalkers), dtype=bool)
+    for temp in range(ntemps):
+        shuffled_walkers = rng.permutation(nwalkers)
+        second_mode[temp, shuffled_walkers[nwalkers // 2 :]] = True
+    coords[:, :, 0, 5] = psi_lo + np.mod(
+        psi_base - psi_lo + second_mode * (np.pi / 2), psi_period
+    )
+    coords[:, :, 0, 7] = phi0_lo + np.mod(
+        phi0_base - phi0_lo + second_mode * np.pi, phi0_period
+    )
 
     state = State({"gb": coords})
     inds = {"gb": np.ones((ntemps, nwalkers, 1), dtype=bool)}
