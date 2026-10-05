@@ -433,10 +433,11 @@ def _load_vgb_sources(records=None):
 
 VGB_RECORDS = load_vgb_catalog()
 SOURCES = _load_vgb_sources(VGB_RECORDS)
-# SOURCES.update({
-#     "Synthetic 1": dict(kind="Benchmark", f0=3.500e-3, fdot=2.00e-17, A=8.77e-23, cosiota=1.00, m1=0.35, m2=0.35, dL_kpc=2.10, lam=1.00, beta=1.40, psi=0.50, phi0=1.20),
-#     "Synthetic 2": dict(kind="Benchmark", f0=3.500e-3, fdot=2.00e-17, A=8.77e-23, cosiota=0.50, m1=0.35, m2=0.35, dL_kpc=2.10, lam=2.50, beta=0.05, psi=0.80, phi0=0.50),
-# })
+SOURCES.update({
+    "Synthetic 1": dict(kind="Benchmark", f0=3.500e-3, fdot=2.00e-17, A=8.77e-23, cosiota=1.00, m1=0.35, m2=0.35, dL_kpc=2.10, lam=1.00, beta=1.40, psi=0.50, phi0=1.20),
+    "Synthetic 2": dict(kind="Benchmark", f0=3.500e-3, fdot=2.00e-17, A=8.77e-23, cosiota=0.50, m1=0.35, m2=0.35, dL_kpc=2.10, lam=2.50, beta=0.05, psi=0.80, phi0=0.50),
+    "ES Cet": dict(kind="VGB", f0=3.22470771e-03, fdot=-1.66e-17, A=9.51718037e-23, cosiota=1.04719755e+00, m1=0.80, m2=0.16, dL_kpc=1.78, lam=4.29491420e-01, beta=-3.54892793e-01, psi=7.85398163e-01, phi0=1.04719755e+00)
+})
 
 
 def get_source(name):

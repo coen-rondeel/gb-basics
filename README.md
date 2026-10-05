@@ -37,6 +37,15 @@ python -m pip install --upgrade pip
 python -m pip install h5py corner healpy eryn lisaorbits segwo pytdi jaxgb lisaconstants ipywidgets jupyter "numpy==2.3.3" ipympl
 ```
 
+### Option 3: uv
+
+Install uv: https://docs.astral.sh/uv/getting-started/installation/
+```bash
+uv venv
+source .venv/bin/activate
+uv pip install h5py corner healpy eryn lisaorbits segwo pytdi jaxgb lisaconstants ipywidgets jupyter "numpy==2.3.3" ipympl
+```
+
 
 ## Notebook outline
 
