@@ -422,10 +422,12 @@ def _load_vgb_sources(records=None):
             dL_kpc=float(row["Distance"]) / 1e3,
             lam=float(row["EclipticLongitude"]),
             beta=float(row["EclipticLatitude"]),
-            psi=float(row["Polarization"]),
-            phi0=float(row["InitialPhase"]),
+            psi=float(row["Polarization"]) + np.pi/4,
+            phi0=float(row["InitialPhase"]) + np.pi/3,
             raw_name=raw_name,
         )
+        # check psi and phi0
+        # print(float(row["Polarization"]), float(row["InitialPhase"]), sources[name]["psi"], sources[name]["phi0"])
     return sources
 
 
@@ -673,6 +675,8 @@ def plot_noise_curve(analysis, source_names=None, fmin=1e-4, fmax=1e-1, n=400):
     plt.loglog(f, np.sqrt(np.abs(cov[:, 0, 0])), label="A channel noise (TDI 2)")
     plt.loglog(f, np.sqrt(np.abs(cov[:, 2, 2])), label="T channel noise (TDI 2)")
     for name in source_names or []:
+        # plt.scatter(SOURCES[name]["f0"], SOURCES[name]["A"], marker="*", s=100, label=name)
+        # plt.text(SOURCES[name]["f0"], SOURCES[name]["A"], name, rotation=90, va="bottom", ha="right", fontsize=8)
         plt.axvline(SOURCES[name]["f0"], ls=":", color="gray")
         plt.text(SOURCES[name]["f0"], plt.ylim()[1], name, rotation=90, va="top", ha="right", fontsize=8)
     plt.xlabel("Frequency [Hz]")
@@ -1002,61 +1006,300 @@ def make_priors(f0_center, f0_halfwidth, A_center, sigma0=None):
     periodic = {"gb": {4: 2 * np.pi, 5: np.pi, 7: 2 * np.pi}}  # psi has period pi
     return priors, periodic, len(bounds), bounds
 
-
-def run_gb_mcmc(log_likelihood, priors, periodic, ndims, bounds, start_params, nwalkers=32, ntemps=8,
-                n_iterations=2000, burn=1000, rel_scatter=1e-4, seed=RNG_SEED, progress=True):
-    """Run parallel-tempered ensemble MCMC with a tight, two-mode initial ensemble.
-
-    Initial walkers cover both equivalent polarization/phase modes:
-    (psi, phi0) and (psi + pi/2, phi0 + pi).
-
-    Returns the Eryn sampler. Eryn draws from NumPy's global RNG, which is seeded here.
+def initialize_gb_coords(
+    priors,
+    rng,
+    start_params,
+    bounds,
+    ntemps,
+    nwalkers,
+    rel_scatter=1e-4,
+):
     """
-    np.random.seed(seed)
-    rng = np.random.default_rng(seed)
-    sampler = EnsembleSampler(nwalkers, ndims, log_likelihood, priors, branch_names=["gb"],
-                              tempering_kwargs=dict(ntemps=ntemps), periodic=periodic, vectorize=True)
+    Symmetry-aware initialization for the GB parameters.
+
+    The phase/polarization variables are initialized in terms of
+    the combinations
+
+        alpha = phi0 + 2 psi
+        beta  = phi0 - 2 psi
+
+    and the inclination-polarization symmetry
+
+        (iota, psi) -> (pi-iota, -psi)
+
+    is also included when the inclination prior spans [0, pi].
+    """
+    psi_idx = 5
+    iota_idx = 6
+    phi0_idx = 7
+    
+    ndims = len(start_params)
 
     coords = np.zeros((ntemps, nwalkers, 1, ndims))
-    # draw from priors
+
+    # ------------------------------------------------------------
+    # 1. Local cloud around the starting point
+    # ------------------------------------------------------------
     coords = priors["gb"].rvs(size=(ntemps, nwalkers)).reshape(ntemps, nwalkers, 1, ndims)
     
-    for i in range(ndims):
+    for i in [0,1,2,3,4]: # f0, fdot, A, beta, lambda
         truth = start_params[i]
+
         if i == 0:
-            scale = min(rel_scatter, 1e-5) * abs(truth)  # stay inside the narrow f0 prior
+            scale = min(rel_scatter, 1e-5) * abs(truth)
         else:
-            scale = rel_scatter * abs(truth) if truth != 0 else rel_scatter
+            scale = (
+                rel_scatter * abs(truth)
+                if truth != 0
+                else rel_scatter
+            )
+
         lo, hi = bounds[i]
         margin = 1e-5 * (hi - lo)
-        coords[:, :, 0, i] = np.clip(rng.normal(truth, scale, size=(ntemps, nwalkers)), lo + margin, hi - margin)
 
-    psi_lo, psi_hi = bounds[5]
-    phi0_lo, phi0_hi = bounds[7]
-    psi_period, phi0_period = psi_hi - psi_lo, phi0_hi - phi0_lo
-    psi_truth, phi0_truth = start_params[5], start_params[7]
-    psi_scale = rel_scatter * abs(psi_truth) if psi_truth != 0 else rel_scatter
-    phi0_scale = rel_scatter * abs(phi0_truth) if phi0_truth != 0 else rel_scatter
-    psi_base = rng.normal(psi_truth, psi_scale, size=(ntemps, nwalkers))
-    phi0_base = rng.normal(phi0_truth, phi0_scale, size=(ntemps, nwalkers))
+        coords[:, :, 0, i] = np.clip(
+            rng.normal(
+                truth,
+                scale,
+                size=(ntemps, nwalkers),
+            ),
+            lo + margin,
+            hi - margin,
+        )
 
-    # Initialize both equivalent modes: (psi, phi0) and (psi + pi/2, phi0 + pi).
-    second_mode = np.zeros((ntemps, nwalkers), dtype=bool)
+    # ------------------------------------------------------------
+    # 2. Draw one common local cloud for phi0 and psi
+    # ------------------------------------------------------------
+
+    psi_lo, psi_hi = bounds[psi_idx]
+    phi0_lo, phi0_hi = bounds[phi0_idx]
+
+    psi_period = psi_hi - psi_lo
+    phi0_period = phi0_hi - phi0_lo
+
+    psi_truth = start_params[psi_idx]
+    phi0_truth = start_params[phi0_idx]
+
+    psi_scale = (
+        rel_scatter * abs(psi_truth)
+        if psi_truth != 0
+        else rel_scatter
+    )
+
+    phi0_scale = (
+        rel_scatter * abs(phi0_truth)
+        if phi0_truth != 0
+        else rel_scatter
+    )
+
+    psi_base = rng.normal(
+        psi_truth,
+        psi_scale,
+        size=(ntemps, nwalkers),
+    )
+
+    phi0_base = rng.normal(
+        phi0_truth,
+        phi0_scale,
+        size=(ntemps, nwalkers),
+    )
+
+    # ------------------------------------------------------------
+    # 3. Four phase/polarization symmetry images
+    # ------------------------------------------------------------
+
+    modes = np.array([
+        # dphi0       dpsi
+        [0.0,         0.0],
+        [np.pi,       np.pi / 2],
+        [2*np.pi,     0.0],
+        [np.pi,      -np.pi / 2],
+    ])
+
+    nmodes = len(modes)
+
+    # ------------------------------------------------------------
+    # 4. Add inclination symmetry as a second binary choice
+    # ------------------------------------------------------------
+
+    iota_lo, iota_hi = bounds[iota_idx]
+
+    inclination_symmetry = (
+        iota_lo <= 0.0
+        and iota_hi >= np.pi
+    )
+
+    if inclination_symmetry:
+        incl_modes = np.array([False, True])
+    else:
+        incl_modes = np.array([False])
+
+    # Total number of modes
+    all_modes = [
+        (phase_mode, flip_iota)
+        for phase_mode in range(nmodes)
+        for flip_iota in incl_modes
+    ]
+
+    nmodes_total = len(all_modes)
+
+    # ------------------------------------------------------------
+    # 5. Populate walkers
+    # ------------------------------------------------------------
+
     for temp in range(ntemps):
-        shuffled_walkers = rng.permutation(nwalkers)
-        second_mode[temp, shuffled_walkers[nwalkers // 2 :]] = True
-    coords[:, :, 0, 5] = psi_lo + np.mod(
-        psi_base - psi_lo + second_mode * (np.pi / 2), psi_period
+
+        permutation = rng.permutation(nwalkers)
+
+        mode_idx = np.empty(nwalkers, dtype=int)
+        mode_idx[permutation] = (
+            np.arange(nwalkers) % nmodes_total
+        )
+
+        for k, (phase_mode, flip_iota) in enumerate(all_modes):
+
+            mask = mode_idx == k
+
+            if not np.any(mask):
+                continue
+
+            dphi0, dpsi = modes[phase_mode]
+
+            # phase/polarization transformation
+            coords[temp, mask, 0, phi0_idx] = (
+                phi0_lo
+                + np.mod(
+                    phi0_base[temp, mask]
+                    - phi0_lo
+                    + dphi0,
+                    phi0_period,
+                )
+            )
+
+            coords[temp, mask, 0, psi_idx] = (
+                psi_lo
+                + np.mod(
+                    psi_base[temp, mask]
+                    - psi_lo
+                    + dpsi,
+                    psi_period,
+                )
+            )
+
+            # inclination-polarization symmetry
+            if flip_iota:
+
+                coords[temp, mask, 0, iota_idx] = (
+                    iota_lo
+                    + iota_hi
+                    - coords[
+                        temp, mask, 0, iota_idx
+                    ]
+                )
+
+                coords[temp, mask, 0, psi_idx] = (
+                    psi_lo
+                    + np.mod(
+                        -coords[
+                            temp, mask, 0, psi_idx
+                        ]
+                        - psi_lo,
+                        psi_period,
+                    )
+                )
+
+    return coords
+
+def run_gb_mcmc(log_likelihood, priors, periodic, ndims, bounds, start_params,
+                nwalkers=32, ntemps=8, n_iterations=2000, burn=1000,
+                rel_scatter=1e-4, seed=RNG_SEED, progress=True):
+    """Run parallel-tempered ensemble MCMC with a tight, symmetry-aware
+    initial ensemble.
+
+    The GB waveform has the discrete symmetries
+
+        (phi0, psi)
+            -> (phi0 + pi, psi)
+            -> (phi0,       psi + pi/2)
+            -> (phi0 + pi, psi + pi/2)
+
+    modulo
+
+        phi0 -> phi0 + 2*pi
+        psi  -> psi  + pi.
+
+    These are the four distinct points in the symmetry orbit within the
+    current parameter ranges
+
+        phi0 in [0, 2*pi)
+        psi  in [0, pi).
+
+    Walkers are distributed as evenly as possible among the four modes,
+    independently for every temperature.
+
+    Returns
+    -------
+    sampler : Eryn EnsembleSampler
+    """
+
+    np.random.seed(seed)
+    rng = np.random.default_rng(seed)
+
+    sampler = EnsembleSampler(
+        nwalkers,
+        ndims,
+        log_likelihood,
+        priors,
+        branch_names=["gb"],
+        tempering_kwargs=dict(ntemps=ntemps),
+        periodic=periodic,
+        vectorize=True,
     )
-    coords[:, :, 0, 7] = phi0_lo + np.mod(
-        phi0_base - phi0_lo + second_mode * np.pi, phi0_period
+
+    # ------------------------------------------------------------------
+    # Initial coordinates
+    # ------------------------------------------------------------------
+    coords = initialize_gb_coords(
+    priors=priors,
+    rng=rng,
+    start_params=start_params,
+    bounds=bounds,
+    ntemps=ntemps,
+    nwalkers=nwalkers,
+    rel_scatter=rel_scatter,
     )
+    
+    # ------------------------------------------------------------------
+    # Initialize Eryn state
+    # ------------------------------------------------------------------
 
     state = State({"gb": coords})
-    inds = {"gb": np.ones((ntemps, nwalkers, 1), dtype=bool)}
-    state.log_prior = sampler.compute_log_prior(state.branches_coords)
-    state.log_like = sampler.compute_log_like(state.branches_coords, logp=state.log_prior, inds=inds)[0]
-    sampler.run_mcmc(state, n_iterations, progress=progress, burn=burn)
+
+    inds = {
+        "gb": np.ones(
+            (ntemps, nwalkers, 1),
+            dtype=bool,
+        )
+    }
+
+    state.log_prior = sampler.compute_log_prior(
+        state.branches_coords
+    )
+
+    state.log_like = sampler.compute_log_like(
+        state.branches_coords,
+        logp=state.log_prior,
+        inds=inds,
+    )[0]
+
+    sampler.run_mcmc(
+        state,
+        n_iterations,
+        progress=progress,
+        burn=burn,
+    )
+
     return sampler
 
 
