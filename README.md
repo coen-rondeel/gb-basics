@@ -4,7 +4,7 @@ This repository contains computational tools for performing a galactic binary an
 
 ## Run on Google Colab
 
-Open the notebook in Colab: [GBExploration.ipynb](https://colab.research.google.com/github/coen-rondeel/gb-basics/blob/main/GBExploration.ipynb).
+If you have a google account, you can run the notebook in Colab: [GBExploration.ipynb](https://colab.research.google.com/github/coen-rondeel/gb-basics/blob/main/GBExploration.ipynb).
 
 ## Run locally
 
